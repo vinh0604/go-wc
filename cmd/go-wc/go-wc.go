@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
 	"io"
@@ -42,20 +43,26 @@ func main() {
 
 	args := flag.Args()
 
-	if len(args) == 0 {
-		panic("not implemented. TODO: read from stdin")
-	}
-
 	exitCode := 0
-	showFilename := len(args) > 1
-	for _, arg := range args {
-		result, err := countForFile(arg, cFlags)
-
+	if len(args) == 0 {
+		result, err := countForStdIn(cFlags)
 		if err != nil {
-			println(fmt.Sprintf("go-wc: %s: %s", arg, err))
+			println(fmt.Sprintf("go-wc: %s", err))
 			exitCode = 1
 		} else {
-			printResult(arg, result, showFilename)
+			printResult("", result, false)
+		}
+	} else {
+		showFilename := len(args) > 1
+		for _, arg := range args {
+			result, err := countForFile(arg, cFlags)
+
+			if err != nil {
+				println(fmt.Sprintf("go-wc: %s: %s", arg, err))
+				exitCode = 1
+			} else {
+				printResult(arg, result, showFilename)
+			}
 		}
 	}
 
@@ -105,6 +112,37 @@ func countForFile(file string, flags countFlags) ([]int, error) {
 	if flags.locale {
 		fileReader.Seek(0, 0)
 		result = append(result, countLocaleChars(fileReader))
+	}
+
+	return result, nil
+}
+
+func countForStdIn(flags countFlags) ([]int, error) {
+	var buffer bytes.Buffer
+	// Copy from stdin to buffer
+	// This is done to be able to read the StdIn multiple times
+	// TODO: Implement multple count flags from a single read
+	_, err := io.Copy(&buffer, os.Stdin)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]int, 0, 4)
+
+	if flags.bytes {
+		result = append(result, countBytes(bytes.NewReader(buffer.Bytes())))
+	}
+
+	if flags.lines {
+		result = append(result, countLines(bytes.NewReader(buffer.Bytes())))
+	}
+
+	if flags.words {
+		result = append(result, countWords(bytes.NewReader(buffer.Bytes())))
+	}
+
+	if flags.locale {
+		result = append(result, countLocaleChars(bytes.NewReader(buffer.Bytes())))
 	}
 
 	return result, nil
