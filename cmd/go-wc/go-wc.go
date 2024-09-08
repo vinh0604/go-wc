@@ -1,12 +1,12 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"unicode"
 )
 
 type countFlags struct {
@@ -14,6 +14,103 @@ type countFlags struct {
 	lines  bool
 	words  bool
 	locale bool
+}
+
+type countBuffer struct {
+	byteCount   int
+	lineCount   int
+	wordCount   int
+	localeCount int
+	lineBuf     []byte
+	wordBuf     []byte
+	localeBuf   []byte
+}
+
+func (cBuf *countBuffer) countLines(buf []byte, n int) {
+	if n == 0 {
+		return
+	}
+
+	lineBuf := append(cBuf.lineBuf, buf[:n]...)
+	lines := bytes.Split(lineBuf, []byte{'\n'})
+	cBuf.lineCount += len(lines) - 1
+	cBuf.lineBuf = lines[len(lines)-1]
+}
+
+func (cBuf *countBuffer) countWords(buf []byte, n int) {
+	wordBuf := append(cBuf.wordBuf, buf[:n]...)
+	words := bytes.Fields(wordBuf)
+	runes := bytes.Runes(wordBuf)
+	if unicode.IsSpace(runes[len(runes)-1]) {
+		cBuf.wordCount += len(words)
+		cBuf.wordBuf = nil
+	} else {
+		cBuf.wordCount += len(words) - 1
+		cBuf.wordBuf = words[len(words)-1]
+	}
+}
+
+func (cBuf *countBuffer) countLocaleChars(buf []byte, n int) {
+	localeBuf := append(cBuf.localeBuf, buf[:n]...)
+	runes := bytes.Runes(localeBuf)
+	cBuf.localeCount += len(runes) - 1
+	cBuf.localeBuf = []byte(string(runes[len(runes)-1]))
+}
+
+func count(r io.Reader, cFlags countFlags) ([]int, error) {
+	cBuf := countBuffer{}
+
+	buf := make([]byte, 4096)
+	for {
+		n, err := r.Read(buf)
+		if err == io.EOF {
+			if cFlags.lines && len(cBuf.lineBuf) > 0 {
+				cBuf.lineCount++
+			}
+			if cFlags.words && len(cBuf.wordBuf) > 0 {
+				cBuf.wordCount++
+			}
+			if cFlags.locale && len(cBuf.localeBuf) > 0 {
+				cBuf.localeCount++
+			}
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		if cFlags.bytes {
+			cBuf.byteCount += n
+		}
+
+		if cFlags.lines {
+			cBuf.countLines(buf, n)
+		}
+
+		if cFlags.words {
+			cBuf.countWords(buf, n)
+		}
+
+		if cFlags.locale {
+			cBuf.countLocaleChars(buf, n)
+		}
+
+	}
+
+	result := make([]int, 0, 4)
+	if cFlags.bytes {
+		result = append(result, cBuf.byteCount)
+	}
+	if cFlags.lines {
+		result = append(result, cBuf.lineCount)
+	}
+	if cFlags.words {
+		result = append(result, cBuf.wordCount)
+	}
+	if cFlags.locale {
+		result = append(result, cBuf.localeCount)
+	}
+	return result, nil
 }
 
 func main() {
@@ -45,15 +142,14 @@ func main() {
 
 	exitCode := 0
 	if len(args) == 0 {
-		result, err := countForStdIn(cFlags)
+		result, err := count(os.Stdin, cFlags)
 		if err != nil {
 			println(fmt.Sprintf("go-wc: %s", err))
 			exitCode = 1
 		} else {
-			printResult("", result, false)
+			printResult("", result)
 		}
 	} else {
-		showFilename := len(args) > 1
 		for _, arg := range args {
 			result, err := countForFile(arg, cFlags)
 
@@ -61,7 +157,7 @@ func main() {
 				println(fmt.Sprintf("go-wc: %s: %s", arg, err))
 				exitCode = 1
 			} else {
-				printResult(arg, result, showFilename)
+				printResult(arg, result)
 			}
 		}
 	}
@@ -69,19 +165,18 @@ func main() {
 	os.Exit(exitCode)
 }
 
-func printResult(arg string, result []int, showFilename bool) {
-	if len(result) > 1 {
-		for _, cnt := range result {
-			print(fmt.Sprintf("\t%d", cnt))
+func printResult(arg string, result []int) {
+	for i, cnt := range result {
+		if i > 0 {
+			print(" ")
 		}
-	} else if len(result) == 1 {
-		print(result[0])
+		print(cnt)
 	}
 
-	if showFilename {
-		print(fmt.Sprintf("\t%s", arg))
+	if arg != "" {
+		print(" ")
+		print(arg)
 	}
-
 	print("\n")
 }
 
@@ -92,107 +187,5 @@ func countForFile(file string, flags countFlags) ([]int, error) {
 	}
 	defer fileReader.Close()
 
-	result := make([]int, 0, 4)
-
-	if flags.bytes {
-		fileReader.Seek(0, 0)
-		result = append(result, countBytes(fileReader))
-	}
-
-	if flags.lines {
-		fileReader.Seek(0, 0)
-		result = append(result, countLines(fileReader))
-	}
-
-	if flags.words {
-		fileReader.Seek(0, 0)
-		result = append(result, countWords(fileReader))
-	}
-
-	if flags.locale {
-		fileReader.Seek(0, 0)
-		result = append(result, countLocaleChars(fileReader))
-	}
-
-	return result, nil
-}
-
-func countForStdIn(flags countFlags) ([]int, error) {
-	var buffer bytes.Buffer
-	// Copy from stdin to buffer
-	// This is done to be able to read the StdIn multiple times
-	// TODO: Implement multple count flags from a single read
-	_, err := io.Copy(&buffer, os.Stdin)
-	if err != nil {
-		return nil, err
-	}
-
-	result := make([]int, 0, 4)
-
-	if flags.bytes {
-		result = append(result, countBytes(bytes.NewReader(buffer.Bytes())))
-	}
-
-	if flags.lines {
-		result = append(result, countLines(bytes.NewReader(buffer.Bytes())))
-	}
-
-	if flags.words {
-		result = append(result, countWords(bytes.NewReader(buffer.Bytes())))
-	}
-
-	if flags.locale {
-		result = append(result, countLocaleChars(bytes.NewReader(buffer.Bytes())))
-	}
-
-	return result, nil
-}
-
-func countBytes(r io.Reader) int {
-	buf := make([]byte, 4096)
-	total := 0
-	for {
-		n, err := r.Read(buf)
-		total += n
-		if err == io.EOF {
-			break
-		}
-	}
-
-	return total
-}
-
-func countLines(r io.Reader) int {
-	scanner := bufio.NewScanner(r)
-	total := 0
-
-	for scanner.Scan() {
-		total++
-	}
-
-	return total
-}
-
-func countWords(r io.Reader) int {
-	scanner := bufio.NewScanner(r)
-	scanner.Split(bufio.ScanWords)
-	total := 0
-
-	for scanner.Scan() {
-		total++
-	}
-
-	return total
-}
-
-func countLocaleChars(r io.Reader) int {
-	scanner := bufio.NewScanner(r)
-	scanner.Split(bufio.ScanRunes)
-	total := 0
-
-	for scanner.Scan() {
-		total++
-	}
-
-	return total
+	return count(fileReader, flags)
 }
