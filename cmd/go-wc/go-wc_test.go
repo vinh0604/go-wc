@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -74,5 +75,23 @@ func TestCountLocaleChars(t *testing.T) {
 
 	if countLocaleChars(strings.NewReader("hêllo")) != 5 {
 		t.Error("countLocaleChars should return 5 for 'hêllo'")
+	}
+}
+
+func TestCountForFile(t *testing.T) {
+	res, err := countForFile("../../data/test.txt", countFlags{
+		bytes:  true,
+		lines:  true,
+		words:  true,
+		locale: true,
+	})
+
+	if err != nil {
+		t.Error("countForFile should not return an error. Got:", err)
+	}
+
+	expected := []int{335042, 7145, 58164, 332146}
+	if !slices.Equal(res, expected) {
+		t.Errorf("countForFile should return %v. Got: %v", expected, res)
 	}
 }
